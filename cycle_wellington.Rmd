@@ -1,0 +1,128 @@
+---
+title: Wellington cycle counter
+author: Jonathan Marshall (@jmarshallnz)
+date: 13 December 2018
+output:
+  html_document:
+    keep_md: yes
+---
+
+This is a simple R markdown document for processing and visualising the cycle count data handily provided
+by Wellington city council using RStudio.
+
+## The libraries we'll need
+
+Make sure these libraries are installed in R/RStudio before you start (i.e. running these should not produce any errors). Newer versions of RStudio (v1.2 and higher) will prompt you when you load this markdown file, so just click through.
+
+```{r libraries}
+library(tidyverse)
+library(lubridate)
+library(knitr)
+```
+
+## The cycle count data
+
+The cycle count data for Wellington is available here under the Creative Commons Attribution 4.0 BY license
+
+https://www.transportprojects.org.nz/cycle-count-data/
+
+Scroll down and click the Download CSV data button. The easiest thing is to save it beside this markdown file so that the loading stage works below. You may have to change the path in the `read_csv` command as no doubt the filename will change.
+
+```{r read_data}
+# read in the data you've downloaded
+cycle=read_csv("ecocounter_data_20181204114814.csv")
+head(cycle)
+```
+
+## Initial tidying
+
+The first thing we notice with this data is there are separate columns for incoming and outcoming counts, but the data are otherwise in long-form: i.e. each row represents either an incoming or outgoing count, not both. So we start by cleaning this up, and also simplifying the column names a bit
+
+```{r convert_to_long}
+long <- cycle %>%
+  group_by(`Site ID`, `Site name`, `Date/time`) %>%
+  summarise(incoming = sum(`Incoming count`), outgoing = sum(`Outgoing count`)) %>%
+  gather(Direction, Count, incoming:outgoing) %>%
+  rename(ID = `Site ID`, Site = `Site name`) %>%
+  ungroup()
+head(long)
+```
+
+## Available counters
+
+A table of the available counters is below.
+
+```{r}
+long %>% select(ID, Site) %>% unique() %>% kable()
+```
+
+We notice that the Karori tunnel has two counter labels for each direction (the others have only one label but both directions present). We next combine these together, dropping the ID column as it's not really needed given the names are unique anyway.
+
+```{r cleanup_sites}
+clean_sites <- long %>% mutate(Site = fct_collapse(Site, `Karori Tunnel` = c("Karori Tunnel - Karori Bound", "Karori Tunnel City Bound"))) %>% select(-ID)
+```
+
+## Extracting date, week, hour
+
+Next, we extract the date, week and hour from the date/time field in order to do some simple visualisation.
+
+```{r clean_dates}
+to_week <- function(x) {
+  wday(x) = 1
+  x
+}
+
+clean_date <- clean_sites %>%
+  mutate(Date = date(`Date/time`),
+         Hour = hour(`Date/time`),
+         Week = to_week(Date),
+         Day = wday(Date, label=TRUE))
+```
+
+## Final cleaning
+
+And finally we get rid of details on sites that have no incoming our outcoming data at all
+
+```{r final_clean}
+clean <- clean_date %>%
+  group_by(Site, Direction) %>%
+  mutate(TotalCount = sum(Count, na.rm=TRUE)) %>%
+  filter(TotalCount > 0) %>% select(-TotalCount) %>%
+  ungroup()
+```
+
+## Hourly cycling numbers Monday-Friday
+
+To plot the hourly times during Monday-Friday
+
+```{r hourly, fig.width=8, fig.height=7}
+hourly <- clean %>%
+  filter(!Day %in% c("Sat", "Sun")) %>%
+  group_by(Site, Direction, Hour) %>%
+  summarise(Count = mean(Count, na.rm=TRUE))
+
+ggplot(hourly, aes(x=Hour, y=Count)) +
+  geom_line(aes(group=Direction), size=1.2, col='black') +
+  geom_line(aes(col=Direction), size=1) +
+  scale_color_manual(values = c("black", "#ffdc3d")) +
+  facet_wrap(~Site, ncol=2) +
+  ylab("Mean cyclists per hour") +
+  theme_bw()
+```
+
+## Weekly counts through the year
+
+```{r weekly, fig.width=8, fig.height=7}
+weekly <- clean %>% 
+  group_by(Site, Direction, Week) %>%
+  summarise(Count = sum(Count, na.rm=TRUE))
+
+ggplot(weekly, aes(x=Week, y=Count)) +
+  geom_line(aes(group=Direction), size=1.2, col='black') +
+  geom_line(aes(col=Direction), size=1) +
+  scale_color_manual(values = c("black", "#ffdc3d")) +
+  facet_wrap(~Site, ncol=2) +
+  ylab("Cyclists per week") +
+  theme_bw() +
+  theme(axis.title.x = element_blank())
+```
